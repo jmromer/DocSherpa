@@ -110,7 +110,7 @@ fn detect_language(file_path: &PathBuf) -> Language {
     }
 }
 
-async fn process_file(file_path: &PathBuf, _language: &Language, config: &config::Config) -> Result<()> {
+async fn process_file(file_path: &PathBuf, language: &Language, config: &config::Config) -> Result<()> {
     if config.verbose {
         println!("\n{} {}", "Processing:".blue(), file_path.display());
     }
@@ -118,31 +118,9 @@ async fn process_file(file_path: &PathBuf, _language: &Language, config: &config
     // Read file content
     let content = std::fs::read_to_string(file_path)?;
     
-    // Parse code based on language
-    // For now, only Python is fully implemented
-    let parser = lang::python::PythonParser::new();
+    // Get the appropriate parser based on language
+    let parser = lang::get_parser(language);
     let parsed_code = parser.parse(&content)?;
-    
-    // Future implementation when tree-sitter is fixed:
-    // let parsed_code = match language {
-    //     Language::Python => {
-    //         let parser = lang::python::PythonParser::new();
-    //         parser.parse(&content)?
-    //     },
-    //     Language::Rust => {
-    //         let parser = lang::rust::RustParser::new();
-    //         parser.parse(&content)?
-    //     },
-    //     Language::JavaScript => {
-    //         let parser = lang::javascript::JavaScriptParser::new();
-    //         parser.parse(&content)?
-    //     },
-    //     Language::TypeScript => {
-    //         let parser = lang::typescript::TypeScriptParser::new();
-    //         parser.parse(&content)?
-    //     },
-    //     Language::Auto => unreachable!("Language should be resolved by this point"),
-    // };
     
     // Analyze docstrings
     let docstring_issues = docstring::analyze(&parsed_code)?;
@@ -193,30 +171,8 @@ async fn process_file(file_path: &PathBuf, _language: &Language, config: &config
     let llm_client = llm::get_client(&config.provider)?;
     let updated_docstrings = llm_client.generate_docstrings(&parsed_code, &docstring_issues).await?;
     
-    // Update the file with new docstrings
-    // For now, only Python is fully implemented
+    // Update the file with new docstrings using the same parser
     let updated_content = parser.update_content(&content, &updated_docstrings)?;
-    
-    // Future implementation when tree-sitter is fixed:
-    // let updated_content = match language {
-    //     Language::Python => {
-    //         let parser = lang::python::PythonParser::new();
-    //         parser.update_content(&content, &updated_docstrings)?
-    //     },
-    //     Language::Rust => {
-    //         let parser = lang::rust::RustParser::new();
-    //         parser.update_content(&content, &updated_docstrings)?
-    //     },
-    //     Language::JavaScript => {
-    //         let parser = lang::javascript::JavaScriptParser::new();
-    //         parser.update_content(&content, &updated_docstrings)?
-    //     },
-    //     Language::TypeScript => {
-    //         let parser = lang::typescript::TypeScriptParser::new();
-    //         parser.update_content(&content, &updated_docstrings)?
-    //     },
-    //     Language::Auto => unreachable!("Language should be resolved by this point"),
-    // };
     
     // Write back to file
     std::fs::write(file_path, updated_content)?;

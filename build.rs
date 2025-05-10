@@ -29,6 +29,16 @@ fn main() {
         println!("cargo:warning=Created directory for tree-sitter-typescript");
     }
     
+    // Link to the language libraries
+    println!("cargo:rustc-link-lib=tree-sitter");
+    
+    // All language links are disabled until we properly set up the tree-sitter parsers
+    // For future reference, when enabling languages, uncomment the appropriate lines below
+    // println!("cargo:rustc-link-lib=static=tree_sitter_javascript");
+    // println!("cargo:rustc-link-lib=static=tree_sitter_rust");
+    // println!("cargo:rustc-link-lib=static=tree_sitter_python");
+    // println!("cargo:rustc-link-lib=static=tree_sitter_typescript");
+    
     // Note to users: For now, we're using pre-built grammar files from the crates
     println!("cargo:warning=Using pre-built tree-sitter grammars from their respective crates");
     println!("cargo:warning=If you encounter linking errors, you might need to install the tree-sitter CLI");

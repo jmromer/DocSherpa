@@ -32,6 +32,14 @@ args = "Generate Docstrings"
 task = "workflow.run"
 args = "Generate Mock Docstrings"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Test JavaScript Parser"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Generate JS Docstrings"
+
 [[workflows.workflow]]
 name = "Rust DocGen Builder"
 author = "agent"
@@ -54,7 +62,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo run -- test_file.py --test --verbose"
+args = "cargo run -- fixtures/test_file.py --test --verbose"
 
 [[workflows.workflow]]
 name = "Generate Docstrings"
@@ -70,7 +78,23 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo run -- test_file.py --verbose --provider mock"
+args = "cargo run -- fixtures/test_file.py --verbose --provider mock"
+
+[[workflows.workflow]]
+name = "Test JavaScript Parser"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- fixtures/test_file.js --test --verbose"
+
+[[workflows.workflow]]
+name = "Generate JS Docstrings"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- fixtures/test_file.js --verbose --provider openai"
 
 [deployment]
 run = ["sh", "-c", "cargo build && echo \"DocGen built successfully! Try it with: ./target/debug/docgen <python_file>\""]

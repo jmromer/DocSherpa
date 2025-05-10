@@ -1,7 +1,7 @@
 pub mod python;
 // Temporarily disabled until tree-sitter linking issues are resolved
-// pub mod rust;
 // pub mod javascript;
+// pub mod rust;
 // pub mod typescript;
 
 /// Trait for language-specific code structure parsers
