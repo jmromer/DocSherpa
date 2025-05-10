@@ -20,7 +20,6 @@ pub trait LanguageParser {
 /// Factory function to get a language parser implementation
 pub fn get_parser(language: &super::Language) -> Box<dyn LanguageParser> {
     match language {
-        // For now, only Python is fully implemented
         super::Language::Python => Box::new(python::PythonParser::new()),
         // Other languages temporarily return Python parser until tree-sitter is fixed
         _ => {
