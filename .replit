@@ -1,0 +1,76 @@
+modules = ["rust"]
+
+[nix]
+channel = "stable-24_05"
+packages = ["openssl", "pkg-config"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Rust DocGen Builder"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "run_compile_test"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Test Python Parser"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Generate Docstrings"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Generate Mock Docstrings"
+
+[[workflows.workflow]]
+name = "Rust DocGen Builder"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo build && echo \"DocGen built successfully! Try it with: ./target/debug/docgen <python_file>\""
+
+[[workflows.workflow]]
+name = "run_compile_test"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo build && cargo run -- --help"
+
+[[workflows.workflow]]
+name = "Test Python Parser"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- test_file.py --test --verbose"
+
+[[workflows.workflow]]
+name = "Generate Docstrings"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- test_file.py --verbose --provider openai"
+
+[[workflows.workflow]]
+name = "Generate Mock Docstrings"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- test_file.py --verbose --provider mock"
+
+[deployment]
+run = ["sh", "-c", "cargo build && echo \"DocGen built successfully! Try it with: ./target/debug/docgen <python_file>\""]
