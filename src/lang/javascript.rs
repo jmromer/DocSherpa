@@ -2,167 +2,83 @@ use crate::error::{DocGenError, DocGenResult};
 use crate::parser::{CodeItem, ParsedCode};
 use crate::docstring::UpdatedDocstring;
 use super::LanguageParser;
-use tree_sitter::{Parser, Language, Query, QueryCursor};
-use std::ops::Range;
+use regex::RegexBuilder;
 
-extern "C" {
-    fn tree_sitter_javascript() -> Language;
-}
-
-/// JavaScript language parser implementation
-pub struct JavaScriptParser {
-    parser: Parser,
-}
+/// JavaScript language parser implementation using regex for simplicity
+pub struct JavaScriptParser {}
 
 impl JavaScriptParser {
     pub fn new() -> Self {
-        let mut parser = Parser::new();
-        let language = unsafe { tree_sitter_javascript() };
-        parser.set_language(language).expect("Failed to load JavaScript grammar");
-        Self { parser }
-    }
-    
-    /// Extract a substring from the source based on a byte range
-    fn get_node_text<'a>(&self, source: &'a str, range: Range<usize>) -> &'a str {
-        &source[range.start..range.end]
-    }
-    
-    /// Get the line number for a given byte position
-    fn get_line_number(&self, source: &str, position: usize) -> usize {
-        let mut line_number = 1;
-        for (i, c) in source.char_indices() {
-            if i >= position {
-                break;
-            }
-            if c == '\n' {
-                line_number += 1;
-            }
-        }
-        line_number
+        Self {}
     }
     
     /// Extract indentation from a line
-    fn extract_indentation(&self, content: &str, line_number: usize) -> String {
-        if let Some(line) = content.lines().nth(line_number - 1) {
-            line.chars().take_while(|c| c.is_whitespace()).collect()
-        } else {
-            "".to_string()
-        }
-    }
-    
-    /// Extract a code block from the source content
-    fn extract_code_block(&self, content: &str, start_line: usize, end_line: usize) -> String {
-        content.lines()
-            .skip(start_line - 1)
-            .take(end_line - start_line + 1)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-    
-    /// Check if a given node is a JSDoc comment
-    fn is_jsdoc_comment(&self, node_text: &str) -> bool {
-        node_text.trim().starts_with("/**") && node_text.trim().ends_with("*/")
+    fn extract_indentation(&self, line: &str) -> String {
+        line.chars().take_while(|c| c.is_whitespace()).collect()
     }
     
     /// Extract parameters from a function declaration
-    fn extract_parameters(&self, param_nodes: &[tree_sitter::Node], source: &str) -> Vec<String> {
-        let mut params = Vec::new();
+    fn extract_parameters(&self, params_str: &str) -> Vec<String> {
+        let cleaned = params_str.trim();
         
-        for param_node in param_nodes {
-            if param_node.kind() == "identifier" {
-                let param_name = self.get_node_text(source, param_node.byte_range());
-                params.push(param_name.to_string());
-            } else if param_node.kind() == "assignment_pattern" {
-                // Handle default parameters (e.g., x = 1)
-                if let Some(left_node) = param_node.child(0) {
-                    if left_node.kind() == "identifier" {
-                        let param_name = self.get_node_text(source, left_node.byte_range());
-                        params.push(format!("{}=", param_name));
-                    }
-                }
-            } else if param_node.kind() == "rest_parameter" {
-                // Handle rest parameters (e.g., ...args)
-                if let Some(rest_node) = param_node.child_by_field_name("parameter") {
-                    if rest_node.kind() == "identifier" {
-                        let param_name = self.get_node_text(source, rest_node.byte_range());
-                        params.push(format!("...{}", param_name));
-                    }
-                }
-            } else if param_node.kind() == "object_pattern" || param_node.kind() == "array_pattern" {
-                // Handle destructuring (simplified)
-                let param_text = self.get_node_text(source, param_node.byte_range());
-                params.push(param_text.to_string());
-            }
+        if cleaned.is_empty() {
+            return Vec::new();
         }
         
-        params
+        cleaned
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .collect()
     }
     
-    /// Extract JSDoc comment and check if it's outdated
-    fn extract_jsdoc(&self, node: tree_sitter::Node, source: &str) -> Option<String> {
-        let mut cursor = node.walk();
-        let mut comment_node = None;
+    /// Check if a line is a JSDoc comment start
+    fn is_jsdoc_start(&self, line: &str) -> bool {
+        line.trim().starts_with("/**")
+    }
+    
+    /// Check if a line is a JSDoc comment end
+    fn is_jsdoc_end(&self, line: &str) -> bool {
+        line.trim().ends_with("*/")
+    }
+    
+    /// Extract JSDoc comment text
+    fn extract_jsdoc(&self, content: &str, start_line: usize) -> Option<(String, usize)> {
+        let lines: Vec<&str> = content.lines().collect();
         
-        // Check for comments directly before the function declaration
-        if cursor.goto_first_child() {
-            if cursor.node().kind() == "comment" && self.is_jsdoc_comment(self.get_node_text(source, cursor.node().byte_range())) {
-                comment_node = Some(cursor.node());
-            }
-        }
-        
-        // There's no goto_previous_sibling in tree-sitter, so we need to use a different approach
-        // Look for comments in the source code before the node's start position
-        if comment_node.is_none() {
-            let node_start_position = node.start_position(); // We use this variable later in the function
-            let node_start_byte = node.start_byte();
-            
-            // Use a substring of the source code up to the node start position
-            let preceding_text = &source[..node_start_byte];
-            
-            // Look for the closest JSDoc comment
-            if let Some(last_jsdoc_start) = preceding_text.rfind("/**") {
-                if let Some(last_jsdoc_end) = preceding_text[last_jsdoc_start..].find("*/") {
-                    let full_comment = &preceding_text[last_jsdoc_start..(last_jsdoc_start + last_jsdoc_end + 2)];
-                    
-                    // Check if it's close enough to be related to this node
-                    let comment_lines_count = full_comment.matches('\n').count();
-                    let comment_end_pos = preceding_text[..last_jsdoc_start].matches('\n').count() + comment_lines_count;
-                    
-                    // Check if the comment is immediately before the node (accounting for blank lines)
-                    if node_start_position.row as usize - comment_end_pos <= 2 {
-                        return Some(
-                            full_comment.trim()
-                                .trim_start_matches("/**")
-                                .trim_end_matches("*/")
-                                .lines()
-                                .map(|line| line.trim().trim_start_matches("*").trim())
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                                .trim()
-                                .to_string()
-                        );
-                    }
-                }
-            }
-            
+        // Check if there's a JSDoc comment before the current position
+        if start_line == 0 || !self.is_jsdoc_start(lines[start_line - 1]) {
             return None;
         }
         
-        // Extract the comment text if found
-        comment_node.map(|node| {
-            let comment_text = self.get_node_text(source, node.byte_range());
-            
-            // Clean up the comment (remove the /** and */ and trim)
-            comment_text.trim()
-                .trim_start_matches("/**")
-                .trim_end_matches("*/")
-                .lines()
-                .map(|line| line.trim().trim_start_matches("*").trim())
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim()
-                .to_string()
-        })
+        // Find JSDoc comment bounds
+        let mut docstring_start = start_line - 1;
+        while docstring_start > 0 && !self.is_jsdoc_start(lines[docstring_start]) {
+            docstring_start -= 1;
+        }
+        
+        let mut docstring_end = docstring_start;
+        while docstring_end < start_line && !self.is_jsdoc_end(lines[docstring_end]) {
+            docstring_end += 1;
+        }
+        
+        if docstring_end == lines.len() || !self.is_jsdoc_end(lines[docstring_end]) {
+            return None;
+        }
+        
+        // Extract JSDoc content (clean up comment markers and indentation)
+        let doc_lines: Vec<String> = lines[docstring_start..=docstring_end]
+            .iter()
+            .map(|line| {
+                line.trim()
+                    .trim_start_matches("/**")
+                    .trim_start_matches("*")
+                    .trim_start_matches(" ")
+                    .trim_end_matches("*/")
+                    .to_string()
+            })
+            .collect();
+        
+        Some((doc_lines.join("\n"), docstring_end - docstring_start + 1))
     }
 }
 
@@ -170,181 +86,183 @@ impl LanguageParser for JavaScriptParser {
     fn parse(&self, content: &str) -> DocGenResult<ParsedCode> {
         let mut code_items = Vec::new();
         
-        // Parse the JavaScript code using tree-sitter
-        // Since Parser doesn't implement Clone, we create a new one each time
-        let mut parser = Parser::new();
-        let language = unsafe { tree_sitter_javascript() };
-        parser.set_language(language).expect("Failed to load JavaScript grammar");
+        // Regex patterns for JavaScript
+        let function_pattern = RegexBuilder::new(r"function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)")
+            .multi_line(true)
+            .build()
+            .map_err(|e| DocGenError::ParsingError(format!("Failed to compile regex: {}", e)))?;
+            
+        let class_pattern = RegexBuilder::new(r"class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)")
+            .multi_line(true)
+            .build()
+            .map_err(|e| DocGenError::ParsingError(format!("Failed to compile regex: {}", e)))?;
+            
+        // More specific method pattern to avoid matching if/for statements
+        // Methods are defined at the class level with proper indentation
+        // We filter the keywords later in the code
+        let method_pattern = RegexBuilder::new(r"(?:^|\n|\r)\s+(?:async\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)\s*(?:\{|$)")
+            .multi_line(true)
+            .build()
+            .map_err(|e| DocGenError::ParsingError(format!("Failed to compile regex: {}", e)))?;
         
-        let tree = parser.parse(content, None)
-            .ok_or_else(|| DocGenError::ParsingError("Failed to parse JavaScript code".into()))?;
+        // Track line numbers
+        let lines: Vec<&str> = content.lines().collect();
         
-        let root_node = tree.root_node();
-        // We don't need cursor here, removing it
-        
-        // Query to find function and class declarations
-        let function_query = Query::new(
-            unsafe { tree_sitter_javascript() },
-            "(function_declaration name: (identifier) @function_name) @function"
-        ).map_err(|e| DocGenError::ParsingError(format!("Failed to create function query: {}", e)))?;
-        
-        let method_query = Query::new(
-            unsafe { tree_sitter_javascript() },
-            "(method_definition name: (property_identifier) @method_name) @method"
-        ).map_err(|e| DocGenError::ParsingError(format!("Failed to create method query: {}", e)))?;
-        
-        let class_query = Query::new(
-            unsafe { tree_sitter_javascript() },
-            "(class_declaration name: (identifier) @class_name) @class"
-        ).map_err(|e| DocGenError::ParsingError(format!("Failed to create class query: {}", e)))?;
-        
-        // Process function declarations
-        let mut query_cursor = QueryCursor::new();
-        let function_matches = query_cursor.matches(&function_query, root_node, content.as_bytes());
-        
-        for function_match in function_matches {
-            for capture in function_match.captures {
-                if capture.index == 0 { // @function capture
-                    let function_node = capture.node;
-                    let name_node = &function_query.capture_names()[1]; // @function_name - borrow instead of moving
-                    
-                    if let Some(name_capture) = function_match.captures.iter().find(|c| &function_query.capture_names()[c.index as usize] == name_node) {
-                        let function_name = self.get_node_text(content, name_capture.node.byte_range()).to_string();
-                        let start_position = function_node.start_position();
-                        let end_position = function_node.end_position();
-                        let line_number = start_position.row + 1; // 1-indexed
-                        let end_line = end_position.row + 1;
-                        
-                        // Find parameters
-                        let params = if let Some(params_node) = function_node.child_by_field_name("parameters") {
-                            let mut param_nodes = Vec::new();
-                            let mut param_cursor = params_node.walk();
-                            
-                            if param_cursor.goto_first_child() {
-                                while param_cursor.node().kind() != ")" {
-                                    if param_cursor.node().kind() != "(" && param_cursor.node().kind() != "," {
-                                        param_nodes.push(param_cursor.node());
-                                    }
-                                    if !param_cursor.goto_next_sibling() {
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            self.extract_parameters(&param_nodes, content)
-                        } else {
-                            Vec::new()
-                        };
-                        
-                        // Extract JSDoc comment
-                        let docstring = self.extract_jsdoc(function_node, content);
-                        
-                        code_items.push(CodeItem {
-                            item_type: "function".to_string(),
-                            name: function_name,
-                            line_number,
-                            code: self.extract_code_block(content, line_number, end_line),
-                            existing_docstring: docstring,
-                            parent: None,
-                            parameters: params,
-                            returns: None,
-                            indentation: self.extract_indentation(content, line_number),
-                        });
-                    }
-                }
-            }
+        // Find function declarations
+        for func_match in function_pattern.captures_iter(content) {
+            let func_name = func_match.get(1).unwrap().as_str();
+            let params_str = func_match.get(2).unwrap().as_str();
+            
+            // Find line number
+            let func_start = func_match.get(0).unwrap().start();
+            let prefix = &content[..func_start];
+            let line_number = prefix.chars().filter(|&c| c == '\n').count();
+            
+            // Extract code block
+            let line = lines[line_number];
+            let indentation = self.extract_indentation(line);
+            
+            // Check for docstring
+            let docstring = if line_number > 0 {
+                self.extract_jsdoc(content, line_number)
+                    .map(|(doc, _)| doc)
+            } else {
+                None
+            };
+            
+            // Add to items
+            code_items.push(CodeItem {
+                item_type: "function".to_string(),
+                name: func_name.to_string(),
+                line_number: line_number + 1, // 1-indexed lines
+                code: line.to_string(),
+                existing_docstring: docstring,
+                parent: None,
+                parameters: self.extract_parameters(params_str),
+                returns: None,
+                indentation,
+            });
         }
         
-        // Process class declarations
-        query_cursor = QueryCursor::new();
-        let class_matches = query_cursor.matches(&class_query, root_node, content.as_bytes());
+        // Track class start positions to avoid duplicates
+        let mut processed_class_positions = std::collections::HashSet::new();
         
-        for class_match in class_matches {
-            for capture in class_match.captures {
-                if capture.index == 0 { // @class capture
-                    let class_node = capture.node;
-                    let name_node = &class_query.capture_names()[1]; // @class_name - borrow instead of moving
-                    
-                    if let Some(name_capture) = class_match.captures.iter().find(|c| &class_query.capture_names()[c.index as usize] == name_node) {
-                        let class_name = self.get_node_text(content, name_capture.node.byte_range()).to_string();
-                        let start_position = class_node.start_position();
-                        let end_position = class_node.end_position();
-                        let line_number = start_position.row + 1; // 1-indexed
-                        let end_line = end_position.row + 1;
-                        
-                        // Extract JSDoc comment
-                        let docstring = self.extract_jsdoc(class_node, content);
-                        
-                        code_items.push(CodeItem {
-                            item_type: "class".to_string(),
-                            name: class_name.clone(),
-                            line_number,
-                            code: self.extract_code_block(content, line_number, end_line),
-                            existing_docstring: docstring,
-                            parent: None,
-                            parameters: Vec::new(),
-                            returns: None,
-                            indentation: self.extract_indentation(content, line_number),
-                        });
-                        
-                        // Now process methods within the class
-                        if let Some(class_body) = class_node.child_by_field_name("body") {
-                            let mut method_query_cursor = QueryCursor::new();
-                            let method_matches = method_query_cursor.matches(&method_query, class_body, content.as_bytes());
-                            
-                            for method_match in method_matches {
-                                for method_capture in method_match.captures {
-                                    if method_capture.index == 0 { // @method capture
-                                        let method_node = method_capture.node;
-                                        let method_name_node = &method_query.capture_names()[1]; // @method_name - borrow instead of moving
-                                        
-                                        if let Some(method_name_capture) = method_match.captures.iter().find(|c| &method_query.capture_names()[c.index as usize] == method_name_node) {
-                                            let method_name = self.get_node_text(content, method_name_capture.node.byte_range()).to_string();
-                                            let method_start = method_node.start_position();
-                                            let method_end = method_node.end_position();
-                                            let method_line = method_start.row + 1;
-                                            let method_end_line = method_end.row + 1;
-                                            
-                                            // Find parameters
-                                            let params = if let Some(params_node) = method_node.child_by_field_name("parameters") {
-                                                let mut param_nodes = Vec::new();
-                                                let mut param_cursor = params_node.walk();
-                                                
-                                                if param_cursor.goto_first_child() {
-                                                    while param_cursor.node().kind() != ")" {
-                                                        if param_cursor.node().kind() != "(" && param_cursor.node().kind() != "," {
-                                                            param_nodes.push(param_cursor.node());
-                                                        }
-                                                        if !param_cursor.goto_next_sibling() {
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                self.extract_parameters(&param_nodes, content)
-                                            } else {
-                                                Vec::new()
-                                            };
-                                            
-                                            // Extract JSDoc comment
-                                            let docstring = self.extract_jsdoc(method_node, content);
-                                            
-                                            code_items.push(CodeItem {
-                                                item_type: "method".to_string(),
-                                                name: method_name,
-                                                line_number: method_line,
-                                                code: self.extract_code_block(content, method_line, method_end_line),
-                                                existing_docstring: docstring,
-                                                parent: Some(class_name.clone()),
-                                                parameters: params,
-                                                returns: None,
-                                                indentation: self.extract_indentation(content, method_line),
-                                            });
-                                        }
-                                    }
-                                }
+        // Find class declarations
+        for class_match in class_pattern.captures_iter(content) {
+            let class_name = class_match.get(1).unwrap().as_str();
+            
+            // Find line number
+            let class_start = class_match.get(0).unwrap().start();
+            
+            // Skip if we've already seen a class at this position
+            if processed_class_positions.contains(&class_start) {
+                continue;
+            }
+            processed_class_positions.insert(class_start);
+            
+            let prefix = &content[..class_start];
+            let line_number = prefix.chars().filter(|&c| c == '\n').count();
+            
+            // Extract code block
+            let line = lines[line_number];
+            let indentation = self.extract_indentation(line);
+            
+            // Check for docstring
+            let docstring = if line_number > 0 {
+                self.extract_jsdoc(content, line_number)
+                    .map(|(doc, _)| doc)
+            } else {
+                None
+            };
+            
+            // Get class definition scope - find matching closing brace
+            let class_code = if line_number < lines.len() {
+                let mut scope_level = 0;
+                let mut end_line = line_number;
+                let mut found_closing = false;
+                
+                for i in line_number..lines.len() {
+                    let l = lines[i];
+                    for c in l.chars() {
+                        if c == '{' {
+                            scope_level += 1;
+                        } else if c == '}' {
+                            scope_level -= 1;
+                            if scope_level == 0 {
+                                end_line = i;
+                                found_closing = true;
+                                break;
                             }
                         }
+                    }
+                    if found_closing {
+                        break;
+                    }
+                }
+                
+                lines[line_number..=end_line].join("\n")
+            } else {
+                line.to_string()
+            };
+            
+            // Add class to items
+            code_items.push(CodeItem {
+                item_type: "class".to_string(),
+                name: class_name.to_string(),
+                line_number: line_number + 1, // 1-indexed lines
+                code: class_code.clone(), // Clone to avoid ownership issues
+                existing_docstring: docstring.clone(),
+                parent: None,
+                parameters: Vec::new(),
+                returns: None,
+                indentation: indentation.clone(),
+            });
+            
+            // Extract methods inside the class
+            if let Some(class_block_start) = class_code.find('{') {
+                let class_body = &class_code[class_block_start..];
+                
+                for method_match in method_pattern.captures_iter(class_body) {
+                    let method_name = method_match.get(1).unwrap().as_str();
+                    // Skip constructor and control structure keywords
+                    if method_name == "constructor" || method_name == "super" || method_name == "return" ||
+                       method_name == "if" || method_name == "for" || method_name == "while" || 
+                       method_name == "switch" || method_name == "function" {
+                        continue;
+                    }
+                    
+                    let params_str = method_match.get(2).unwrap().as_str();
+                    
+                    // Find line number relative to class start
+                    let method_start = method_match.get(0).unwrap().start();
+                    let method_prefix = &class_body[..method_start];
+                    let method_line_offset = method_prefix.chars().filter(|&c| c == '\n').count();
+                    let method_line_number = line_number + method_line_offset;
+                    
+                    if method_line_number < lines.len() {
+                        let method_line = lines[method_line_number];
+                        let method_indentation = self.extract_indentation(method_line);
+                        
+                        // Check for docstring
+                        let method_docstring = if method_line_number > 0 {
+                            self.extract_jsdoc(content, method_line_number)
+                                .map(|(doc, _)| doc)
+                        } else {
+                            None
+                        };
+                        
+                        // Add method to items
+                        code_items.push(CodeItem {
+                            item_type: "method".to_string(),
+                            name: method_name.to_string(),
+                            line_number: method_line_number + 1, // 1-indexed lines
+                            code: method_line.to_string(),
+                            existing_docstring: method_docstring,
+                            parent: Some(class_name.to_string()),
+                            parameters: self.extract_parameters(params_str),
+                            returns: None,
+                            indentation: method_indentation,
+                        });
                     }
                 }
             }
@@ -357,114 +275,111 @@ impl LanguageParser for JavaScriptParser {
     }
     
     fn update_content(&self, content: &str, updated_docstrings: &[UpdatedDocstring]) -> DocGenResult<String> {
-        let mut new_content = content.to_string();
+        // Create a completely new approach using temporary files to avoid position issues
+        use std::fs::File;
+        use std::io::{Write, BufRead, BufReader};
+        use tempfile::tempdir;
         
-        // Get access to the parsed code items for more accurate updates
-        let parsed_code = self.parse(&new_content)?;
+        let dir = tempdir().map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create temp dir: {}", e))))?;
         
-        // Sort updates in reverse order by line number to avoid line number shifts
-        let mut sorted_updates = updated_docstrings.to_vec();
-        sorted_updates.sort_by(|a, b| {
-            let a_line = parsed_code.items[a.item_index].line_number;
-            let b_line = parsed_code.items[b.item_index].line_number;
-            b_line.cmp(&a_line)
-        });
+        // Input path
+        let input_path = dir.path().join("input.js");
         
-        for update in sorted_updates {
-            let item = &parsed_code.items[update.item_index];
-            let lines: Vec<&str> = new_content.lines().collect();
-            
-            // Get the line that defines the function/class/method
-            let line_index = item.line_number - 1; // Convert to 0-based index
-            
-            if line_index >= lines.len() {
-                return Err(DocGenError::UpdateError(
-                    format!("Line number {} is out of bounds", item.line_number)));
-            }
-            
-            // Unused variable - just remove the prefix and add underscore to avoid warning
-            let _def_line = lines[line_index];
-            
-            // Get indentation level from the definition line
-            let indentation = item.indentation.clone();
-            
-            // Check if there's an existing docstring to replace
-            let mut has_existing_docstring = false;
-            let mut docstring_start_line = line_index;
-            let mut docstring_end_line = line_index;
-            
-            // Look for existing JSDoc comment
-            for i in (0..line_index).rev() {
-                let line = lines[i].trim();
-                if line.starts_with("/**") {
-                    has_existing_docstring = true;
-                    docstring_start_line = i;
-                    
-                    // Find the end of the JSDoc comment
-                    for j in i..line_index {
-                        if lines[j].trim().contains("*/") {
-                            docstring_end_line = j;
-                            break;
+        // Write original content to input file
+        {
+            let mut file = File::create(&input_path)
+                .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create temp file: {}", e))))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to write to temp file: {}", e))))?;
+        }
+        
+        // Output path
+        let output_path = dir.path().join("output.js");
+        let mut out_file = File::create(&output_path)
+            .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create output file: {}", e))))?;
+        
+        // Get the items
+        let parsed = self.parse(content)?;
+        let items = parsed.items;
+        
+        // Create a map of line numbers to docstrings for quick lookup
+        let mut docstrings_by_line = std::collections::HashMap::new();
+        for docstring in updated_docstrings {
+            if docstring.item_index < items.len() {
+                let line_num = items[docstring.item_index].line_number;
+                
+                // Format docstring in JSDoc style
+                let indentation = &docstring.indentation;
+                let doc_lines: Vec<String> = docstring.new_docstring
+                    .lines()
+                    .map(|line| {
+                        if line.trim().is_empty() {
+                            format!("{}* ", indentation)
+                        } else {
+                            format!("{}* {}", indentation, line)
                         }
-                    }
-                    break;
-                } else if !line.is_empty() && !line.starts_with("//") {
-                    // We found a non-comment, non-empty line, so there's no preceding docstring
-                    break;
-                }
-            }
-            
-            // Format the JSDoc comment
-            let mut jsdoc_lines = Vec::new();
-            jsdoc_lines.push(format!("{}/**", indentation));
-            
-            // Add docstring lines with proper indentation
-            for line in update.new_docstring.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    jsdoc_lines.push(format!("{} * {}", indentation, trimmed));
-                } else {
-                    jsdoc_lines.push(format!("{} *", indentation));
-                }
-            }
-            
-            jsdoc_lines.push(format!("{} */", indentation));
-            let formatted_jsdoc = jsdoc_lines.join("\n");
-            
-            // Update the content
-            if has_existing_docstring {
-                // Replace existing JSDoc comment
-                let before = if docstring_start_line > 0 {
-                    lines[..docstring_start_line].join("\n")
-                } else {
-                    String::new()
-                };
+                    })
+                    .collect();
                 
-                let after = if docstring_end_line + 1 < lines.len() {
-                    format!("\n{}", lines[(docstring_end_line + 1)..].join("\n"))
-                } else {
-                    String::new()
-                };
+                let formatted_docstring = format!("{}/**\n{}\n{}*/\n", 
+                    indentation,
+                    doc_lines.join("\n"),
+                    indentation
+                );
                 
-                new_content = format!("{}\n{}{}", before, formatted_jsdoc, after);
-            } else {
-                // Insert new JSDoc comment before the definition
-                let before = if line_index > 0 {
-                    lines[..line_index].join("\n")
-                } else {
-                    String::new()
-                };
-                
-                let after = if line_index < lines.len() {
-                    format!("\n{}", lines[line_index..].join("\n"))
-                } else {
-                    String::new()
-                };
-                
-                new_content = format!("{}\n{}{}", before, formatted_jsdoc, after);
+                docstrings_by_line.insert(line_num, formatted_docstring);
             }
         }
         
-        Ok(new_content)
+        // Now process the file line by line
+        let file = File::open(&input_path)
+            .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to open temp file: {}", e))))?;
+        let reader = BufReader::new(file);
+        
+        let mut line_num = 1;
+        let mut skipping_docstring = false;
+        let mut inserted_docstrings = std::collections::HashSet::new();
+        
+        for line_result in reader.lines() {
+            let line = line_result.map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to read line: {}", e))))?;
+            
+            // If we're at the start of an existing docstring, skip it
+            if self.is_jsdoc_start(&line) {
+                skipping_docstring = true;
+                continue;
+            }
+            
+            // If we're at the end of an existing docstring, stop skipping
+            if skipping_docstring && self.is_jsdoc_end(&line) {
+                skipping_docstring = false;
+                continue;
+            }
+            
+            // Skip lines that are part of an existing docstring
+            if skipping_docstring {
+                continue;
+            }
+            
+            // Check if we need to insert a docstring at this line
+            if docstrings_by_line.contains_key(&line_num) && !inserted_docstrings.contains(&line_num) {
+                // Insert the docstring
+                let docstring = docstrings_by_line.get(&line_num).unwrap();
+                writeln!(out_file, "{}", docstring.trim_end())
+                    .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to write docstring: {}", e))))?;
+                inserted_docstrings.insert(line_num);
+            }
+            
+            // Write the current line
+            writeln!(out_file, "{}", line)
+                .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to write line: {}", e))))?;
+            
+            line_num += 1;
+        }
+        
+        // Read final output
+        let result = std::fs::read_to_string(&output_path)
+            .map_err(|e| DocGenError::FileError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to read output file: {}", e))))?;
+        
+        Ok(result)
     }
 }

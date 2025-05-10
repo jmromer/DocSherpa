@@ -1,6 +1,6 @@
 pub mod python;
+pub mod javascript;
 // Temporarily disabled until tree-sitter linking issues are resolved
-// pub mod javascript;
 // pub mod rust;
 // pub mod typescript;
 
@@ -21,6 +21,7 @@ pub trait LanguageParser {
 pub fn get_parser(language: &super::Language) -> Box<dyn LanguageParser> {
     match language {
         super::Language::Python => Box::new(python::PythonParser::new()),
+        super::Language::JavaScript => Box::new(javascript::JavaScriptParser::new()),
         // Other languages temporarily return Python parser until tree-sitter is fixed
         _ => {
             println!("Warning: Requested language not fully implemented. Using Python parser instead.");
@@ -28,7 +29,6 @@ pub fn get_parser(language: &super::Language) -> Box<dyn LanguageParser> {
         }
         // Uncomment these when tree-sitter linking issues are resolved
         // super::Language::Rust => Box::new(rust::RustParser::new()),
-        // super::Language::JavaScript => Box::new(javascript::JavaScriptParser::new()),
         // super::Language::TypeScript => Box::new(typescript::TypeScriptParser::new()),
     }
 }

@@ -40,6 +40,22 @@ args = "Test JavaScript Parser"
 task = "workflow.run"
 args = "Generate JS Docstrings"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Generate Mock JS Docstrings"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Test Fixed JS Parser"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Test JavaScript Parser Fixed"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Generate Mock JS Docstrings Fixed"
+
 [[workflows.workflow]]
 name = "Rust DocGen Builder"
 author = "agent"
@@ -95,6 +111,38 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cargo run -- fixtures/test_file.js --verbose --provider openai"
+
+[[workflows.workflow]]
+name = "Generate Mock JS Docstrings"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- fixtures/test_file.js --verbose --provider mock"
+
+[[workflows.workflow]]
+name = "Test Fixed JS Parser"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- fixtures/test_file_js_clean.js --test --verbose"
+
+[[workflows.workflow]]
+name = "Test JavaScript Parser Fixed"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- fixtures/test_file_js_fixed.js --test --verbose"
+
+[[workflows.workflow]]
+name = "Generate Mock JS Docstrings Fixed"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cargo run -- fixtures/test_file_js_fixed.js --verbose --provider mock"
 
 [deployment]
 run = ["sh", "-c", "cargo build && echo \"DocGen built successfully! Try it with: ./target/debug/docgen <python_file>\""]
